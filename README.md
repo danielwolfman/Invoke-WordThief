@@ -2,7 +2,7 @@
 
 This script runs a key logger that records keypresses while user has opened Microsoft Word. After the key press has been captured, its being sent to attacker server through TCP session. This script has also persistency function, spawning a batch file in user's startup folder.
 
-## Why PowerShell?![PowerShell Logo](https://1.bp.blogspot.com/-trcervxbi1c/Wqvxd3tIdAI/AAAAAAAAK3s/x4CX7QkRAbY1OdnFediDFeR7eG9M_R-iwCLcBGAs/s1600/PowerShell_5.0_icon.png =30x30)
+## Why PowerShell?<img src="https://1.bp.blogspot.com/-trcervxbi1c/Wqvxd3tIdAI/AAAAAAAAK3s/x4CX7QkRAbY1OdnFediDFeR7eG9M_R-iwCLcBGAs/s1600/PowerShell_5.0_icon.png" width="30" height="30" />
 
 PowerShell framwork is in every Windows operation system since 2006.
 PowerShell is usually a task automation and configuration management framework from [Microsoft](https://en.wikipedia.org/wiki/Microsoft "Microsoft"), but attackers can use it to execute code conveniently on any Windows machine.
